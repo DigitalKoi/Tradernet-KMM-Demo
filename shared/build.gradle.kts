@@ -2,11 +2,21 @@ import org.jetbrains.kotlin.gradle.plugin.mpp.KotlinNativeTarget
 
 plugins {
     kotlin("multiplatform")
-    kotlin("native.cocoapods")
     id("com.android.library")
+    kotlin("plugin.serialization")
 }
 
-version = "1.0"
+//workaround for https://youtrack.jetbrains.com/issue/KT-43944
+android {
+    configurations {
+        create("androidTestApi")
+        create("androidTestDebugApi")
+        create("androidTestReleaseApi")
+        create("testApi")
+        create("testDebugApi")
+        create("testReleaseApi")
+    }
+}
 
 kotlin {
     android()
@@ -17,41 +27,72 @@ kotlin {
         else
             ::iosX64
 
-    iosTarget("ios") {}
-
-    cocoapods {
-        summary = "Some description for the Shared Module"
-        homepage = "Link to the Shared Module homepage"
-        ios.deploymentTarget = "14.1"
-        frameworkName = "shared"
-        podfile = project.file("../iosApp/Podfile")
+    iosTarget("ios") {
+        binaries {
+            framework {
+                baseName = "RssReader"
+            }
+        }
     }
-    
+
     sourceSets {
-        val commonMain by getting
-        val commonTest by getting {
+        val commonMain by getting {
             dependencies {
-                implementation(kotlin("test-common"))
-                implementation(kotlin("test-annotations-common"))
+                //Network
+                implementation("io.ktor:ktor-client-core:${properties["version.ktor"]}")
+                implementation("io.ktor:ktor-client-logging:${properties["version.ktor"]}")
+                //Coroutines
+                implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:${properties["version.kotlinx.coroutines"]}")
+                //Logger
+                implementation("com.github.aakira:napier:1.4.1")
+                //JSON
+                implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:${properties["version.kotlinx.serialization"]}")
+                //Key-Value storage
+                implementation("com.russhwolf:multiplatform-settings:0.7.4")
             }
         }
-        val androidMain by getting
-        val androidTest by getting {
+
+        val androidMain by getting {
             dependencies {
-                implementation(kotlin("test-junit"))
-                implementation("junit:junit:4.13.2")
+                //Network
+                implementation("io.ktor:ktor-client-okhttp:${properties["version.ktor"]}")
             }
         }
-        val iosMain by getting
-        val iosTest by getting
+
+        val iosMain by getting {
+            dependencies {
+                //Network
+                implementation("io.ktor:ktor-client-ios:${properties["version.ktor"]}")
+            }
+        }
+
+        all {
+            languageSettings.useExperimentalAnnotation("kotlinx.coroutines.ExperimentalCoroutinesApi")
+            languageSettings.useExperimentalAnnotation("kotlinx.coroutines.FlowPreview")
+        }
     }
 }
 
 android {
-    compileSdkVersion(30)
-    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
+    compileSdk = (properties["android.compileSdk"] as String).toInt()
+
     defaultConfig {
-        minSdkVersion(23)
-        targetSdkVersion(30)
+        minSdk = (properties["android.minSdk"] as String).toInt()
+        targetSdk = (properties["android.targetSdk"] as String).toInt()
     }
+    sourceSets["main"].manifest.srcFile("src/androidMain/AndroidManifest.xml")
 }
+
+val packForXcode by tasks.creating(Sync::class) {
+    val mode = System.getenv("CONFIGURATION") ?: "DEBUG"
+    val framework = kotlin.targets.getByName<KotlinNativeTarget>("ios").binaries.getFramework(mode)
+    val targetDir = File(buildDir, "xcode-frameworks")
+
+    group = "build"
+    dependsOn(framework.linkTask)
+    inputs.property("mode", mode)
+
+    from({ framework.outputDirectory })
+    into(targetDir)
+}
+tasks.getByName("build").dependsOn(packForXcode)
